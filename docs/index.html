@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>VPS Bot Hosting - Prototype</title>
+    <style>body{font-family:Arial;margin:20px} label{display:block;margin-top:8px}</style>
+  </head>
+  <body>
+    <h1>VPS Bot Hosting - Admin UI</h1>
+    <div>
+      <label>Admin Token: <input id="token" style="width:420px" placeholder="x-admin-token" /></label>
+      <button id="refresh">Refresh bots</button>
+    </div>
+
+    <h2>Create Bot</h2>
+    <div>
+      <label>Name: <input id="name" /></label>
+      <label>Language: <select id="language"><option value="node">Node.js</option><option value="python">Python</option></select></label>
+      <label>Discord Token: <input id="btoken" style="width:420px" /></label>
+      <button id="create">Create Bot</button>
+    </div>
+
+    <h2>Bots</h2>
+    <div id="bots"></div>
+
+    <script>
+      const apiBase = '';
+      async function request(path, opts={}){
+        const token = document.getElementById('token').value;
+        opts.headers = opts.headers || {};
+        opts.headers['x-admin-token'] = token;
+        const res = await fetch(path, opts);
+        return res.json();
+      }
+      async function refresh(){
+        const res = await request('/api/bots');
+        const containerList = document.getElementById('bots');
+        containerList.innerHTML = '';
+        if (res.error){ containerList.innerText = 'Error: '+res.error; return }
+        res.forEach(c => {
+          const el = document.createElement('div');
+          el.style.border='1px solid #ccc'; el.style.padding='8px'; el.style.margin='6px 0';
+          el.innerHTML = `<b>${c.labels.bot_name||c.names[0]}</b> (${c.id.slice(0,12)})<br>Image: ${c.image} - State: ${c.state} - ${c.status}<br>`;
+          const stop = document.createElement('button'); stop.innerText='Stop'; stop.onclick=()=>request('/api/bots/'+c.Id+'/stop',{method:'POST'}).then(refresh);
+          const start = document.createElement('button'); start.innerText='Start'; start.onclick=()=>request('/api/bots/'+c.Id+'/start',{method:'POST'}).then(refresh);
+          const del = document.createElement('button'); del.innerText='Delete'; del.onclick=()=>{ if(confirm('Delete?')) request('/api/bots/'+c.Id,{method:'DELETE'}).then(refresh)};
+          el.appendChild(stop); el.appendChild(start); el.appendChild(del);
+          containerList.appendChild(el);
+        })
+      }
+      document.getElementById('refresh').onclick=refresh;
+      document.getElementById('create').onclick=async ()=>{
+        const name=document.getElementById('name').value; const language=document.getElementById('language').value; const token=document.getElementById('btoken').value;
+        const res=await request('/api/bots',{method:'POST', body: JSON.stringify({name,language,token}), headers: {'Content-Type':'application/json'}});
+        alert(JSON.stringify(res)); refresh();
+      }
+    </script>
+  </body>
+</html>
