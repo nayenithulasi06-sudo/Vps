@@ -2,58 +2,144 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VPS Bot Hosting - Prototype</title>
-    <style>body{font-family:Arial;margin:20px} label{display:block;margin-top:8px}</style>
+    <title>Shadow Panel - Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+    <style>
+      :root{--bg1:#0b3;--panel-bg:rgba(10,10,10,0.65);--accent:#10b981}
+      html,body,#app{height:100%;margin:0}
+      body{font-family:Inter,Arial,Helvetica,sans-serif;background:linear-gradient(180deg,#0a0 0%,#060 100%);background-image:url('');background-size:cover;color:#fff}
+      .layout{display:flex;height:100%}
+      .sidebar{width:72px;background:rgba(0,0,0,0.35);backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;padding-top:12px}
+      .sidebar button{background:none;border:none;color:#fff;margin:10px 0;cursor:pointer;width:48px;height:48px;border-radius:8px}
+      .main{flex:1;padding:18px;overflow:auto}
+      .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+      .token-input{display:flex;gap:8px}
+      .panel{background:var(--panel-bg);border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 6px 18px rgba(0,0,0,0.4)}
+      .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+      .card{padding:12px;border-radius:10px;background:rgba(0,0,0,0.45)}
+      .terminal{height:320px;border-radius:8px;overflow:hidden}
+      .controls{display:flex;gap:8px}
+      .big{font-size:18px}
+      .green{background:var(--accent);color:#000;padding:8px 12px;border-radius:8px;border:none}
+      @media(max-width:800px){.sidebar{width:56px}.main{padding:8px}.terminal{height:240px}}
+    </style>
   </head>
   <body>
-    <h1>VPS Bot Hosting - Admin UI</h1>
-    <div>
-      <label>Admin Token: <input id="token" style="width:420px" placeholder="x-admin-token" /></label>
-      <button id="refresh">Refresh bots</button>
+    <div id="app">
+      <div class="layout">
+        <div class="sidebar">
+          <button title="Home">🏠</button>
+          <button title="Terminal">💻</button>
+          <button title="Files">📁</button>
+          <button title="Settings">⚙️</button>
+          <div style="flex:1"></div>
+          <button title="Account">👤</button>
+        </div>
+        <div class="main">
+          <div class="header">
+            <div class="big">Shadow Panel</div>
+            <div class="token-input">
+              <input id="apiHost" placeholder="API host (e.g. http://1.2.3.4:4000)" style="padding:8px;border-radius:8px;border:0;width:320px" />
+              <input id="adminToken" placeholder="Admin token" style="padding:8px;border-radius:8px;border:0;width:180px" />
+              <button id="connectBtn" class="green">Connect</button>
+            </div>
+          </div>
+
+          <div id="status" class="panel">Not connected</div>
+
+          <div class="grid">
+            <div class="card panel">
+              <h3>Server Summary</h3>
+              <div id="summary">No data</div>
+            </div>
+
+            <div class="card panel">
+              <h3>Actions</h3>
+              <div class="controls">
+                <button id="refreshBtn">Refresh bots</button>
+                <button id="listLogsBtn">Show logs for first bot</button>
+              </div>
+            </div>
+
+            <div class="card panel" style="grid-column:1/-1">
+              <h3>Terminal / Logs</h3>
+              <div class="terminal" id="terminal"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
     </div>
 
-    <h2>Create Bot</h2>
-    <div>
-      <label>Name: <input id="name" /></label>
-      <label>Language: <select id="language"><option value="node">Node.js</option><option value="python">Python</option></select></label>
-      <label>Discord Token: <input id="btoken" style="width:420px" /></label>
-      <button id="create">Create Bot</button>
-    </div>
-
-    <h2>Bots</h2>
-    <div id="bots"></div>
-
+    <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
     <script>
-      const apiBase = '';
-      async function request(path, opts={}){
-        const token = document.getElementById('token').value;
-        opts.headers = opts.headers || {};
-        opts.headers['x-admin-token'] = token;
-        const res = await fetch(path, opts);
-        return res.json();
+      const apiHostInput = document.getElementById('apiHost');
+      const tokenInput = document.getElementById('adminToken');
+      const connectBtn = document.getElementById('connectBtn');
+      const statusEl = document.getElementById('status');
+      const summaryEl = document.getElementById('summary');
+      const refreshBtn = document.getElementById('refreshBtn');
+      const listLogsBtn = document.getElementById('listLogsBtn');
+      const termContainer = document.getElementById('terminal');
+
+      let apiBase = '';
+      let ws = null;
+      let term = null;
+      let bots = [];
+
+      function setStatus(s){ statusEl.innerText = s }
+
+      connectBtn.onclick = async () => {
+        apiBase = apiHostInput.value.trim();
+        const token = tokenInput.value.trim();
+        if (!apiBase || !token) return alert('Enter API host and admin token');
+        setStatus('Connecting to API...');
+        try{
+          const res = await fetch(apiBase + '/api/health');
+          if (!res.ok) throw new Error('API not reachable');
+          setStatus('Connected to API');
+          // open websocket for logs
+          const wsUrl = (apiBase.startsWith('https')? 'wss://' : 'ws://') + apiBase.replace(/^https?:\/\//,'') + '/ws?token=' + encodeURIComponent(token);
+          ws = new WebSocket(wsUrl);
+          ws.onopen = ()=> setStatus('WS connected');
+          ws.onmessage = (ev)=> {
+            // write to terminal
+            const txt = typeof ev.data === 'string' ? ev.data : ''; 
+            if (!term) { initTerminal(); }
+            term.write(txt.replace(/\r\n/g,'\n'));
+          }
+          ws.onclose = ()=> setStatus('WS closed');
+          // list bots
+          const list = await fetch(apiBase + '/api/bots',{headers:{'x-admin-token': token}}).then(r=>r.json());
+          if (list.error) { setStatus('API error: '+list.error); return }
+          bots = list;
+          summaryEl.innerText = `Found ${bots.length} managed bot(s)`;
+        }catch(e){ setStatus('Error: '+e.message); }
       }
-      async function refresh(){
-        const res = await request('/api/bots');
-        const containerList = document.getElementById('bots');
-        containerList.innerHTML = '';
-        if (res.error){ containerList.innerText = 'Error: '+res.error; return }
-        res.forEach(c => {
-          const el = document.createElement('div');
-          el.style.border='1px solid #ccc'; el.style.padding='8px'; el.style.margin='6px 0';
-          el.innerHTML = `<b>${c.labels.bot_name||c.names[0]}</b> (${c.id.slice(0,12)})<br>Image: ${c.image} - State: ${c.state} - ${c.status}<br>`;
-          const stop = document.createElement('button'); stop.innerText='Stop'; stop.onclick=()=>request('/api/bots/'+c.Id+'/stop',{method:'POST'}).then(refresh);
-          const start = document.createElement('button'); start.innerText='Start'; start.onclick=()=>request('/api/bots/'+c.Id+'/start',{method:'POST'}).then(refresh);
-          const del = document.createElement('button'); del.innerText='Delete'; del.onclick=()=>{ if(confirm('Delete?')) request('/api/bots/'+c.Id,{method:'DELETE'}).then(refresh)};
-          el.appendChild(stop); el.appendChild(start); el.appendChild(del);
-          containerList.appendChild(el);
-        })
+
+      refreshBtn.onclick = async ()=>{
+        const token = tokenInput.value.trim();
+        if (!apiBase || !token) return alert('Connect first');
+        const list = await fetch(apiBase + '/api/bots',{headers:{'x-admin-token': token}}).then(r=>r.json());
+        if (list.error) return alert('Error: '+list.error);
+        bots = list;
+        summaryEl.innerText = `Found ${bots.length} managed bot(s)`;
       }
-      document.getElementById('refresh').onclick=refresh;
-      document.getElementById('create').onclick=async ()=>{
-        const name=document.getElementById('name').value; const language=document.getElementById('language').value; const token=document.getElementById('btoken').value;
-        const res=await request('/api/bots',{method:'POST', body: JSON.stringify({name,language,token}), headers: {'Content-Type':'application/json'}});
-        alert(JSON.stringify(res)); refresh();
+
+      listLogsBtn.onclick = ()=>{
+        if (!bots || bots.length===0) return alert('No bots');
+        const first = bots[0];
+        if (!ws || ws.readyState !== WebSocket.OPEN) return alert('WS not connected');
+        ws.send(JSON.stringify({type:'logs', containerId: first.id}));
+        setStatus('Streaming logs for ' + (first.labels?.bot_name||first.names[0]));
       }
+
+      function initTerminal(){
+        term = new window.Terminal({cols:80,rows:20,theme:{background:'#0b0b0b'}});
+        term.open(termContainer);
+      }
+
     </script>
   </body>
 </html>

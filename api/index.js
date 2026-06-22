@@ -102,4 +102,72 @@ app.delete('/api/bots/:id', checkAuth, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`API listening on ${PORT}`));
+// Create HTTP server and attach WebSocket server for logs
+const http = require('http');
+const server = http.createServer(app);
+const { WebSocketServer } = require('ws');
+const { Writable } = require('stream');
+
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws, req) => {
+  // simple token auth via query string: /ws?token=...
+  const qs = req.url.split('?')[1] || '';
+  const params = new URLSearchParams(qs);
+  const token = params.get('token');
+  if (!token || token !== ADMIN_TOKEN) {
+    ws.send(JSON.stringify({ error: 'unauthorized' }));
+    ws.close();
+    return;
+  }
+
+  const activeStreams = new Map();
+
+  ws.on('message', async (message) => {
+    let msg;
+    try { msg = JSON.parse(message.toString()); } catch (e) { return; }
+    if (msg.type === 'logs' && msg.containerId) {
+      try {
+        const container = docker.getContainer(msg.containerId);
+        const logStream = await container.logs({ follow: true, stdout: true, stderr: true, tail: 200 });
+
+        const writer = new Writable({
+          write(chunk, encoding, callback) {
+            try { ws.send(chunk.toString()); } catch (e) { /* ignore */ }
+            callback();
+          }
+        });
+
+        // demux stdout/stderr into the single writer so client gets plain text
+        docker.modem.demuxStream(logStream, writer, writer);
+
+        activeStreams.set(msg.containerId, { logStream, writer });
+
+        logStream.on('end', () => {
+          try { writer.end(); } catch (e) {}
+          activeStreams.delete(msg.containerId);
+        });
+
+      } catch (err) {
+        ws.send(JSON.stringify({ error: err.message }));
+      }
+    } else if (msg.type === 'stopLogs' && msg.containerId) {
+      const entry = activeStreams.get(msg.containerId);
+      if (entry) {
+        try { entry.logStream.destroy(); } catch (e) {}
+        activeStreams.delete(msg.containerId);
+        ws.send(JSON.stringify({ ok: true, stopped: msg.containerId }));
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    // cleanup active streams
+    for (const [id, entry] of activeStreams.entries()) {
+      try { entry.logStream.destroy(); } catch (e) {}
+    }
+    activeStreams.clear();
+  });
+});
+
+server.listen(PORT, () => console.log(`API + WS listening on ${PORT}`));

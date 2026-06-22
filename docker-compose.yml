@@ -24,3 +24,6 @@ services:
     build: ./bot-templates/python-bot
     image: vps_python_template:latest
     command: ["true"]
+volumes:
+  caddy_data:
+  caddy_config:
