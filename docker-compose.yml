@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  api:
+    build: ./api
+    image: vps_api:latest
+    ports:
+      - "4000:4000"
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - OWNER_EMAIL=${OWNER_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./api/data:/app/data
+  web:
+    build: ./web
+    image: vps_web:latest
+    ports:
+      - "3000:3000"
+  vps_node_template:
+    build: ./bot-templates/node-bot
+    image: vps_node_template:latest
+    command: ["true"]
+  vps_python_template:
+    build: ./bot-templates/python-bot
+    image: vps_python_template:latest
+    command: ["true"]
